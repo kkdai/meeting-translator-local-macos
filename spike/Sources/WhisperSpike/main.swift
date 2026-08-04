@@ -47,6 +47,12 @@ func run() async {
     print("---")
     print("avg transcribe time: \(String(format: "%.3f", avg))s over \(runs) runs")
     print("transcript: \(lastText)")
+
+    let holdSeconds = args.count > 4 ? Double(args[4]) ?? 0 : 0
+    if holdSeconds > 0 {
+        print("holding model resident for \(holdSeconds)s for memory sampling...")
+        try? await Task.sleep(nanoseconds: UInt64(holdSeconds * 1_000_000_000))
+    }
     print("=== done ===")
 }
 

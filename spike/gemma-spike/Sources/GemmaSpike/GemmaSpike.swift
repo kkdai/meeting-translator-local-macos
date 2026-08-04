@@ -82,6 +82,12 @@ struct GemmaSpike {
                 print(info.summary())
             }
         }
+
+        let holdSeconds = args.count > 2 ? Double(args[2]) ?? 0 : 0
+        if holdSeconds > 0 {
+            print("holding model resident for \(holdSeconds)s for memory sampling...")
+            try? await Task.sleep(nanoseconds: UInt64(holdSeconds * 1_000_000_000))
+        }
         print("=== done ===")
     }
 }
