@@ -1,9 +1,12 @@
 #!/bin/bash
 set -e
 
-# Phase 1 build script: WhisperKit only, no MLX yet, so plain `swift build`
-# is sufficient (MLX would require xcodebuild -- see
-# docs/design/2026-08-04-roadmap.md's "換機器接續開發前必看" section for why).
+# Phase 2+: depends on MLX (translation), which needs its Metal shaders compiled
+# and bundled by Xcode's build system -- `swift build` alone links fine but fails
+# at runtime with "Failed to load the default metallib" (see
+# docs/design/2026-08-05-phase0-spike-results-translation.md's "環境發現"
+# section for why). So this packages via `xcodebuild` against the bare
+# Package.swift instead of `swiftc`/`swift build` directly.
 
 APP_NAME="MeetingTranslatorLocal"
 BUNDLE_ID="com.local.MeetingTranslatorLocal"
@@ -11,16 +14,24 @@ APP_DIR="${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MAC_OS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+DERIVED_DATA_DIR=".build/xcode"
 
 cd "$(dirname "$0")"
 
 echo "🧹 清理舊的編譯檔案..."
 rm -rf "$APP_DIR"
 
-echo "🛠 建置中（swift build -c release）..."
-swift build -c release
+echo "🛠 建置中（xcodebuild -scheme ${APP_NAME} -configuration Release）..."
+xcodebuild -scheme "$APP_NAME" \
+  -configuration Release \
+  -destination "platform=macOS,arch=arm64" \
+  -derivedDataPath "$DERIVED_DATA_DIR" \
+  -skipMacroValidation \
+  build
 
-BIN_PATH=".build/release/${APP_NAME}"
+BIN_PATH="${DERIVED_DATA_DIR}/Build/Products/Release/${APP_NAME}"
+BUNDLE_PATH="${DERIVED_DATA_DIR}/Build/Products/Release/mlx-swift_Cmlx.bundle"
+
 if [ ! -f "$BIN_PATH" ]; then
   echo "❌ 找不到編譯產物：$BIN_PATH"
   exit 1
@@ -30,6 +41,11 @@ echo "📂 建立 App 目錄結構..."
 mkdir -p "$MAC_OS_DIR"
 mkdir -p "$RESOURCES_DIR"
 cp "$BIN_PATH" "${MAC_OS_DIR}/${APP_NAME}"
+
+if [ -d "$BUNDLE_PATH" ]; then
+  echo "📦 複製 MLX Metal shader bundle..."
+  cp -R "$BUNDLE_PATH" "${MAC_OS_DIR}/"
+fi
 
 echo "📝 產生 Info.plist..."
 cat <<EOF > "${CONTENTS_DIR}/Info.plist"
@@ -46,13 +62,13 @@ cat <<EOF > "${CONTENTS_DIR}/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0-phase1</string>
+    <string>0.2.0-phase2</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>MeetingTranslatorLocal 需要螢幕錄製權限，以便擷取會議應用程式的音訊進行本地端語音辨識。</string>
+    <string>MeetingTranslatorLocal 需要螢幕錄製權限，以便擷取會議應用程式的音訊進行本地端語音辨識與翻譯。</string>
 </dict>
 </plist>
 EOF
