@@ -44,7 +44,15 @@ cp "$BIN_PATH" "${MAC_OS_DIR}/${APP_NAME}"
 
 if [ -d "$BUNDLE_PATH" ]; then
   echo "📦 複製 MLX Metal shader bundle..."
+  # MLX looks for its resource bundle relative to the running executable when
+  # that's a bare binary (works for spike CLIs sitting next to the bundle),
+  # but inside a proper .app it resolves resources via Bundle.main, which
+  # means Contents/Resources/ -- copying only into Contents/MacOS/ (matching
+  # the spike CLI layout) builds and launches fine but crashes on first MLX
+  # call with "Failed to load the default metallib". Copy to both so it's
+  # found regardless of which lookup path fires.
   cp -R "$BUNDLE_PATH" "${MAC_OS_DIR}/"
+  cp -R "$BUNDLE_PATH" "${RESOURCES_DIR}/"
 fi
 
 echo "📝 產生 Info.plist..."
