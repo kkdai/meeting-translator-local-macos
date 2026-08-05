@@ -12,9 +12,12 @@ protocol LocalSTTDelegate: AnyObject {
 /// WhisperKit's `AudioStreamTranscriber` is built around tapping the microphone
 /// (`AudioProcessing.startRecordingLive`), which doesn't fit app audio delivered
 /// via `AudioCaptureManager`'s ScreenCaptureKit callback. Instead this buffers
-/// incoming PCM into fixed-length chunks and transcribes each chunk as it fills,
-/// which is simpler and works with any audio source but can clip words that
-/// land on a chunk boundary -- a known Phase 1 limitation, not a bug.
+/// incoming PCM and flushes it for transcription as soon as it detects a pause
+/// in speech (VAD-based chunking, reusing WhisperKit's own `EnergyVAD` rather
+/// than depending on `AudioStreamTranscriber`'s mic-tap plumbing) -- Phase 1
+/// originally used fixed 3-second chunks, but that clipped words at arbitrary
+/// boundaries badly enough in real use (2026-08-05 user testing) to fix before
+/// starting Phase 2 translation work.
 actor LocalSTTEngine {
     weak var delegate: LocalSTTDelegate?
 
@@ -24,9 +27,21 @@ actor LocalSTTEngine {
     private var isFlushing = false
 
     private let sampleRate: Double = 16000
-    private let chunkDuration: Double = 3.0
 
-    private var chunkSampleCount: Int { Int(sampleRate * chunkDuration) }
+    /// Don't flush on a pause this early -- avoids emitting one-word fragments
+    /// on every short gap between filler words.
+    private let minChunkDuration: Double = 0.8
+    /// Force a flush even without a detected pause, so one long unbroken
+    /// sentence (or a VAD miss) can't stall the subtitle indefinitely.
+    private let maxChunkDuration: Double = 8.0
+    /// How much trailing silence counts as "a pause worth cutting on".
+    private let trailingSilenceDuration: Double = 0.35
+
+    private let vad = EnergyVAD(frameLength: 0.1)
+
+    private var minChunkSamples: Int { Int(sampleRate * minChunkDuration) }
+    private var maxChunkSamples: Int { Int(sampleRate * maxChunkDuration) }
+    private var trailingSilenceSamples: Int { Int(sampleRate * trailingSilenceDuration) }
 
     func setDelegate(_ delegate: LocalSTTDelegate) {
         self.delegate = delegate
@@ -65,9 +80,21 @@ actor LocalSTTEngine {
         }
         sampleBuffer.append(contentsOf: floats)
 
-        if sampleBuffer.count >= chunkSampleCount, !isFlushing {
+        guard !isFlushing, sampleBuffer.count >= minChunkSamples else { return }
+
+        if sampleBuffer.count >= maxChunkSamples {
+            await flush()
+        } else if isTrailingSilence() {
             await flush()
         }
+    }
+
+    /// Whether the most recent `trailingSilenceDuration` of buffered audio is silent,
+    /// i.e. the speaker just paused and this is a natural place to cut the chunk.
+    private func isTrailingSilence() -> Bool {
+        guard sampleBuffer.count >= trailingSilenceSamples else { return false }
+        let tail = Array(sampleBuffer.suffix(trailingSilenceSamples))
+        return !vad.voiceActivity(in: tail).contains(true)
     }
 
     private func flush() async {
